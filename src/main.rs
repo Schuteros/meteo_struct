@@ -39,6 +39,11 @@ struct Data_1 {
     data: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct Label {
+    labels: i64
+}
+
 fn main() {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b';')
@@ -50,7 +55,6 @@ fn main() {
             records.push(record);
         }
     }
-    println!("{:?}", &records);
 
     let mut sorted_records: BTreeMap<String, FullRecord> = BTreeMap::new();
 
@@ -87,7 +91,6 @@ fn main() {
             }
         }
     }
-    println!("{:?}", &sorted_records);
 
     let mut sorted_records_datetime_numeric: BTreeMap<i64, FullRecord> = BTreeMap::new();
 
@@ -117,12 +120,22 @@ fn main() {
         sorted_records_datetime_numeric.remove(&smallest);
     }
 
+    for i in &sorted_records {
+        println!("{}", i.0);
+    }
+
     let mut data_1: Vec<Vec<f32>> = Vec::new();
+    let mut label_1: Vec<f32> = Vec::new();
 
     let length = sorted_records.len();
     let mut i = 0;
+
+    let mut writer = WriterBuilder::new().from_path("output.csv").unwrap();
+    let mut label_writer = WriterBuilder::new().from_path("labels.csv").unwrap();
+
     for data in &sorted_records {
-        if length - 24 >= i {
+        let mut string = String::new();
+        if length - 50 >= i {
             let mut element = Vec::new();
             for record in sorted_records.range((Included(*data.0), Included(data.0 + 3600*24+1))) {
                 element.push(record.1.TDRY);
@@ -131,25 +144,28 @@ fn main() {
                 element.push(record.1.HPRAB);
 
             }
+            for value in &element {
+                string = string + &value.to_string() + " ";
+            }
             data_1.push(element);
+
+            string = string
+                .trim()
+                .replace(" ", ",");
+
+            println!("{}, {}", data.0, data.0+3600i64*24i64*2i64);
+
+            label_1.push(sorted_records.get(&(data.0 + 3600i64*24i64*2i64)).unwrap().TDRY);
+
+            let row = Data_1 {
+                data: string,
+            };
+            writer.serialize(row).unwrap();
+            label_writer.serialize(label_1[i]).unwrap();
             i+=1;
         }
     }
-    println!("{:?}", data_1);
 
-    let mut writer = WriterBuilder::new().from_path("output.csv").unwrap();
-    for record in data_1 {
-        let mut data = String::new();
-        for value in record {
-            data = data + &value.to_string() + " ";
-        }
-        data = data
-            .trim()
-            .replace(" ", ",");
-        let row = Data_1 {
-            data,
-        };
-        writer.serialize(row).unwrap();
-    }
     writer.flush().unwrap();
+    label_writer.flush().unwrap();
 }
