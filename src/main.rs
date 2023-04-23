@@ -7,7 +7,22 @@ use csv;
 use csv::{WriterBuilder, Writer};
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
+use std::panic::catch_unwind;
 use chrono::{DateTime, Utc, TimeZone};
+use serde::de::Unexpected::Option;
+
+// DenseMatrix wrapper around Vec
+use smartcore::linalg::basic::matrix::DenseMatrix;
+// SVM
+use smartcore::svm::svr::{SVRParameters, SVR};
+use smartcore::svm::{Kernels, RBFKernel};
+// Random Forest
+use smartcore::ensemble::random_forest_regressor::{RandomForestRegressor, RandomForestRegressorParameters};
+// Model performance
+use smartcore::model_selection::train_test_split;
+use smartcore::metrics::mean_squared_error;
+use smartcore::svm;
+use smartcore::tree::decision_tree_regressor::{DecisionTreeRegressor, DecisionTreeRegressorParameters};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Record {
@@ -120,10 +135,6 @@ fn main() {
         sorted_records_datetime_numeric.remove(&smallest);
     }
 
-    for i in &sorted_records {
-        println!("{}", i.0);
-    }
-
     let mut data_1: Vec<Vec<f32>> = Vec::new();
     let mut label_1: Vec<f32> = Vec::new();
 
@@ -153,9 +164,7 @@ fn main() {
                 .trim()
                 .replace(" ", ",");
 
-            println!("{}, {}", data.0, data.0+3600i64*24i64*2i64);
-
-            label_1.push(sorted_records.get(&(data.0 + 3600i64*24i64*2i64)).unwrap().TDRY);
+            label_1.push(sorted_records.get(&(data.0 + 3600i64*24i64*2i64)).unwrap().TDRY as f32);
 
             let row = Data_1 {
                 data: string,
@@ -168,4 +177,53 @@ fn main() {
 
     writer.flush().unwrap();
     label_writer.flush().unwrap();
+
+    // Load dataset
+    let meteo_data = data_1;
+    // Transform dataset into a NxM matrix
+    let x = DenseMatrix::from_2d_array( &meteo_data.iter().map(|v| v.as_slice()).collect::<Vec<_>>()[..]);
+    // These are our target values
+    let y = label_1;
+
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 1f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(10f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm)
+    );
+    // Decision Tree
+    let parameters = DecisionTreeRegressorParameters{
+        max_depth: Some(20),
+        min_samples_leaf: 1,
+        min_samples_split: 1,
+        seed: Some(1000),
+    };
+    let tree = DecisionTreeRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_tree = tree.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_tree));
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(10),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 30,
+        m: Some(1),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf));
 }
