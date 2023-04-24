@@ -1,28 +1,21 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::Path;
 use serde_derive::{Deserialize, Serialize};
 use csv;
 use csv::{WriterBuilder, Writer};
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
-use std::panic::catch_unwind;
-use chrono::{DateTime, Utc, TimeZone};
-use serde::de::Unexpected::Option;
+use chrono::{Utc, TimeZone};
 
 // DenseMatrix wrapper around Vec
 use smartcore::linalg::basic::matrix::DenseMatrix;
 // SVM
 use smartcore::svm::svr::{SVRParameters, SVR};
-use smartcore::svm::{Kernels, RBFKernel};
+use smartcore::svm::{Kernels};
 // Random Forest
 use smartcore::ensemble::random_forest_regressor::{RandomForestRegressor, RandomForestRegressorParameters};
 // Model performance
 use smartcore::model_selection::train_test_split;
 use smartcore::metrics::mean_squared_error;
-use smartcore::svm;
-use smartcore::tree::decision_tree_regressor::{DecisionTreeRegressor, DecisionTreeRegressorParameters};
+
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Record {
@@ -59,10 +52,10 @@ struct Label {
     labels: i64
 }
 
-fn main() {
+fn read_data(path: &str) -> BTreeMap<i64, FullRecord> {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b';')
-        .from_path("meteorologiskie_arhiva_dati.csv").unwrap();
+        .from_path(path).unwrap();
     let mut records = Vec::new();
     for result in rdr.deserialize() {
         let record: Record = result.unwrap();
@@ -134,63 +127,141 @@ fn main() {
         sorted_records.insert(smallest, full_record);
         sorted_records_datetime_numeric.remove(&smallest);
     }
+    sorted_records
+}
 
-    let mut data_1: Vec<Vec<f32>> = Vec::new();
-    let mut label_1: Vec<f32> = Vec::new();
+fn create_data(records: &BTreeMap<i64, FullRecord>, hours: usize, hours_per_data: i32, after_hours: f32) -> (DenseMatrix<f32>, Vec<f32>) {
+    let mut training_data: Vec<Vec<f32>> = Vec::new();
+    let mut labels: Vec<f32> = Vec::new();
 
-    let length = sorted_records.len();
+    let length = records.len();
     let mut i = 0;
 
     let mut writer = WriterBuilder::new().from_path("output.csv").unwrap();
     let mut label_writer = WriterBuilder::new().from_path("labels.csv").unwrap();
 
-    for data in &sorted_records {
+    for data in records {
         let mut string = String::new();
-        if length - 50 >= i {
+        if length - 390 >= i {
             let mut element = Vec::new();
-            for record in sorted_records.range((Included(*data.0), Included(data.0 + 3600*24+1))) {
-                element.push(record.1.TDRY);
-                element.push(record.1.RLH);
-                element.push(record.1.PRSS);
-                element.push(record.1.HPRAB);
-
+            let mut j = 0;
+            for record in records.range((Included(*data.0), Included(data.0 + 3600 * hours as i64 +1))) {
+                if j % hours_per_data == 0 {
+                    element.push(record.1.TDRY);
+                    element.push(record.1.RLH);
+                    element.push(record.1.PRSS);
+                    element.push(record.1.HPRAB);
+                }
+                j+=1
             }
             for value in &element {
                 string = string + &value.to_string() + " ";
             }
-            data_1.push(element);
+            training_data.push(element);
 
             string = string
                 .trim()
                 .replace(" ", ",");
 
-            label_1.push(sorted_records.get(&(data.0 + 3600i64*24i64*2i64)).unwrap().TDRY as f32);
+            labels.push(records.get(&(data.0 + 3600i64* after_hours as i64 + 3600*24)).unwrap().TDRY as f32);
 
             let row = Data_1 {
                 data: string,
             };
             writer.serialize(row).unwrap();
-            label_writer.serialize(label_1[i]).unwrap();
+            label_writer.serialize(labels[i]).unwrap();
             i+=1;
         }
     }
-
     writer.flush().unwrap();
     label_writer.flush().unwrap();
+    let x = DenseMatrix::from_2d_array( &training_data.iter().map(|v| v.as_slice()).collect::<Vec<_>>()[..]);
+    (x, labels)
+}
 
-    // Load dataset
-    let meteo_data = data_1;
-    // Transform dataset into a NxM matrix
-    let x = DenseMatrix::from_2d_array( &meteo_data.iter().map(|v| v.as_slice()).collect::<Vec<_>>()[..]);
-    // These are our target values
-    let y = label_1;
 
+fn main() {
+    let sorted_records = read_data("meteorologiskie_arhiva_dati.csv");
+
+    // 24 hour data, predict after 24 hours
+    /*let (x, y) = create_data(&sorted_records, 24, 1, 24f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
         eps: 0.1,
-        c: 1f32,
+        c: 100f32,
         tol: 1e-3,
-        kernel: Some(Box::from(Kernels::rbf().with_gamma(10f64))),
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.05f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
+    );
+
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 1,
+        n_trees: 50,
+        m: Some(5),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    */
+    // 24 hour data predict after 48 hour
+
+    //let (x, y) = create_data(&sorted_records, 24, 1, 48f32);
+    //let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+
+    /*let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 100f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.1f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 60,
+        m: Some(5),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+*/
+    // 24 hour data predict after 72 hour
+    /*
+    let (x, y) = create_data(&sorted_records, 24, 1, 72f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 10f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.1f64))),
     };
     let svm = SVR::fit(&x_train, &y_train, parameters)
         .unwrap();
@@ -201,24 +272,14 @@ fn main() {
         "MSE: {}",
         mean_squared_error(&y_test, &y_hat_svm)
     );
-    // Decision Tree
-    let parameters = DecisionTreeRegressorParameters{
-        max_depth: Some(20),
-        min_samples_leaf: 1,
-        min_samples_split: 1,
-        seed: Some(1000),
-    };
-    let tree = DecisionTreeRegressor::fit(&x_train, &y_train, parameters).unwrap();
-    let y_hat_tree = tree.predict(&x_test).unwrap();
-    // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_tree));
+
     // Random Forest
     let parameters = RandomForestRegressorParameters{
-        max_depth: Some(10),
+        max_depth: Some(40),
         min_samples_leaf: 1,
         min_samples_split: 2,
-        n_trees: 30,
-        m: Some(1),
+        n_trees: 40,
+        m: Some(5),
         keep_samples: false,
         seed: 0,
     };
@@ -226,4 +287,286 @@ fn main() {
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
     println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf));
+     */
+
+    // 24 hour data predict after 7 days
+/*
+    let (x, y) = create_data(&sorted_records, 24, 1, 168f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 1f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.05f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(40),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 40,
+        m: Some(6),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+*/
+    // 72 hour data predict after 24 hour
+/*
+    let (x, y) = create_data(&sorted_records, 72, 1, 24f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 100f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.01f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 60,
+        m: Some(10),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+*/
+    // 72 hour data predict after 48 hour
+    /*
+    let (x, y) = create_data(&sorted_records, 72, 1, 48f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 100f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.01f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 40,
+        m: Some(7),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    */
+    // 72 hour data predict after 72 hour
+    /*
+    let (x, y) = create_data(&sorted_records, 72, 1, 72f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 10f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.01f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(50),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 60,
+        m: Some(6),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+     */
+    // 72 hour data predict after 7 days
+    /*
+    let (x, y) = create_data(&sorted_records, 72, 3, 168f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 10f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.01f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 40,
+        m: Some(5),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    */
+
+    // 7 day data predict after 24 hours
+    /*
+    let (x, y) = create_data(&sorted_records, 168, 1, 24f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 100f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.001f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 50,
+        m: Some(9),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+
+     */
+
+    // 7 day data predict after 48 hour
+    /*
+    let (x, y) = create_data(&sorted_records, 168, 2, 48f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 100f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.001f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 40,
+        m: Some(6),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+
+     */
+    // 7 day data predict after 72 hour
+    let (x, y) = create_data(&sorted_records, 168, 3, 72f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 0.1f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.001f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(10),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 10,
+        m: Some(1),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    // 7 day data predict after 7 days
 }
