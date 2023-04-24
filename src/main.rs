@@ -6,6 +6,7 @@ use serde_derive::{Deserialize, Serialize};
 use csv;
 use csv::{WriterBuilder, Writer};
 use std::collections::BTreeMap;
+use std::ffi::FromVecWithNulError;
 use std::ops::Bound::Included;
 use std::panic::catch_unwind;
 use chrono::{DateTime, Utc, TimeZone};
@@ -59,10 +60,10 @@ struct Label {
     labels: i64
 }
 
-fn main() {
+fn read_data(path: &str) -> BTreeMap<i64, FullRecord> {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b';')
-        .from_path("meteorologiskie_arhiva_dati.csv").unwrap();
+        .from_path(path).unwrap();
     let mut records = Vec::new();
     for result in rdr.deserialize() {
         let record: Record = result.unwrap();
@@ -134,21 +135,24 @@ fn main() {
         sorted_records.insert(smallest, full_record);
         sorted_records_datetime_numeric.remove(&smallest);
     }
+    sorted_records
+}
 
-    let mut data_1: Vec<Vec<f32>> = Vec::new();
-    let mut label_1: Vec<f32> = Vec::new();
+fn create_data(records: BTreeMap<i64, FullRecord>) -> (DenseMatrix<f32>, Vec<f32>) {
+    let mut training_data: Vec<Vec<f32>> = Vec::new();
+    let mut labels: Vec<f32> = Vec::new();
 
-    let length = sorted_records.len();
+    let length = records.len();
     let mut i = 0;
 
     let mut writer = WriterBuilder::new().from_path("output.csv").unwrap();
     let mut label_writer = WriterBuilder::new().from_path("labels.csv").unwrap();
 
-    for data in &sorted_records {
+    for data in &records {
         let mut string = String::new();
         if length - 50 >= i {
             let mut element = Vec::new();
-            for record in sorted_records.range((Included(*data.0), Included(data.0 + 3600*24+1))) {
+            for record in records.range((Included(*data.0), Included(data.0 + 3600*24+1))) {
                 element.push(record.1.TDRY);
                 element.push(record.1.RLH);
                 element.push(record.1.PRSS);
@@ -158,33 +162,34 @@ fn main() {
             for value in &element {
                 string = string + &value.to_string() + " ";
             }
-            data_1.push(element);
+            training_data.push(element);
 
             string = string
                 .trim()
                 .replace(" ", ",");
 
-            label_1.push(sorted_records.get(&(data.0 + 3600i64*24i64*2i64)).unwrap().TDRY as f32);
+            labels.push(records.get(&(data.0 + 3600i64*24i64*2i64)).unwrap().TDRY as f32);
 
             let row = Data_1 {
                 data: string,
             };
             writer.serialize(row).unwrap();
-            label_writer.serialize(label_1[i]).unwrap();
+            label_writer.serialize(labels[i]).unwrap();
             i+=1;
         }
     }
-
     writer.flush().unwrap();
     label_writer.flush().unwrap();
+    let x = DenseMatrix::from_2d_array( &training_data.iter().map(|v| v.as_slice()).collect::<Vec<_>>()[..]);
+    (x, labels)
+}
 
-    // Load dataset
-    let meteo_data = data_1;
-    // Transform dataset into a NxM matrix
-    let x = DenseMatrix::from_2d_array( &meteo_data.iter().map(|v| v.as_slice()).collect::<Vec<_>>()[..]);
-    // These are our target values
-    let y = label_1;
 
+fn main() {
+    let sorted_records = read_data("meteorologiskie_arhiva_dati.csv");
+    let (x, y) = create_data(sorted_records);
+
+    // 24 hour data, predict after 24 hours
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
         eps: 0.1,
