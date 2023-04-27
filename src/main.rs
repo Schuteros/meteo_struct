@@ -537,11 +537,11 @@ fn main() {
 
      */
     // 7 day data predict after 72 hour
-    let (x, y) = create_data(&sorted_records, 168, 3, 72f32);
+    /*let (x, y) = create_data(&sorted_records, 168, 2, 72f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
         eps: 0.1,
-        c: 0.1f32,
+        c: 10f32,
         tol: 1e-3,
         kernel: Some(Box::from(Kernels::rbf().with_gamma(0.001f64))),
     };
@@ -556,11 +556,11 @@ fn main() {
     );
     // Random Forest
     let parameters = RandomForestRegressorParameters{
-        max_depth: Some(10),
+        max_depth: Some(30),
         min_samples_leaf: 1,
         min_samples_split: 2,
-        n_trees: 10,
-        m: Some(1),
+        n_trees: 40,
+        m: Some(6),
         keep_samples: false,
         seed: 0,
     };
@@ -568,5 +568,37 @@ fn main() {
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
     println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    */
     // 7 day data predict after 7 days
+    let (x, y) = create_data(&sorted_records, 168, 2, 168f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 10f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.001f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(30),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 50,
+        m: Some(5),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
 }
