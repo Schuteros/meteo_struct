@@ -1101,9 +1101,10 @@ fn main() {
     println!("{}", precision(&true_labels, &labels));
 */
     // 72 hour data predict after 72 hour
+    /*
     let (x, y) = create_data_1(&sorted_records, 72, 1, 72f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
-    let parameters = &SVRParameters{
+    /*let parameters = &SVRParameters{
         eps: 0.1,
         c: 10f32,
         tol: 1e-3,
@@ -1117,88 +1118,15 @@ fn main() {
     println!(
         "MSE: {}",
         mean_squared_error(&y_test, &y_hat_svm).sqrt()
-    );
-
-    // Random Forest
-    let parameters = RandomForestRegressorParameters{
-        max_depth: Some(50),
-        min_samples_leaf: 1,
-        min_samples_split: 2,
-        n_trees: 60,
-        m: Some(6),
-        keep_samples: false,
-        seed: 0,
-    };
-    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
-    let y_hat_rf = rf.predict(&x_test).unwrap();
-    // Calculate test error
-    let mut labels: Vec<f32> = Vec::new();
-    let mut true_labels: Vec<f32> = Vec::new();
-    for i in 0..y_hat_rf.len() {
-        if &y_test[i] != &0f32 {
-            labels.push(y_hat_rf[i].clone());
-            true_labels.push(y_test[i].clone());
-        }
-    }
-    println!("MSE: {}", mean_squared_error(&true_labels, &labels).sqrt());
-    let mut precipitation = 0;
-    for label in &y_test {
-        if label == &0f32 {
-            precipitation += 1;
-        }
-    }
-    let precipitation: f32 = precipitation as f32 / y_test.len() as f32;
-    println!("{}", precipitation);
-
-    let mut labels: Vec<f32> = Vec::new();
-    for label in &y_hat_rf {
-        if label < &0.1f32 {
-            labels.push(0f32);
-        } else {
-            labels.push(1f32);
-        }
-    }
-
-    let mut true_labels: Vec<f32> = Vec::new();
-
-    for label in &y_hat_rf {
-        if label < &0.1f32 {
-            true_labels.push(0f32);
-        } else {
-            true_labels.push(1f32);
-        }
-    }
-
-    println!("{}", precision(&true_labels, &labels));
-
-
-    // 72 hour data predict after 7 days
-    /*
-    let (x, y) = create_data(&sorted_records, 72, 3, 168f32);
-    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
-    let parameters = &SVRParameters{
-        eps: 0.1,
-        c: 10f32,
-        tol: 1e-3,
-        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.01f64))),
-    };
-    let svm = SVR::fit(&x_train, &y_train, parameters)
-        .unwrap();
-
-    let y_hat_svm = svm.predict(&x_test).unwrap();
-    // Calculate test error
-    println!(
-        "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
-    );
+    );*/
 
     // Random Forest
     let parameters = RandomForestRegressorParameters{
         max_depth: Some(30),
         min_samples_leaf: 1,
         min_samples_split: 2,
-        n_trees: 40,
-        m: Some(5),
+        n_trees: 10,
+        m: Some(2),
         keep_samples: false,
         seed: 0,
     };
@@ -1234,7 +1162,7 @@ fn main() {
 
     let mut true_labels: Vec<f32> = Vec::new();
 
-    for label in &y_hat_rf {
+    for label in &y_test {
         if label < &0.1f32 {
             true_labels.push(0f32);
         } else {
@@ -1243,7 +1171,80 @@ fn main() {
     }
 
     println!("{}", precision(&true_labels, &labels));
-    */
+*/
+
+    // 72 hour data predict after 7 days
+
+    let (x, y) = create_data_1(&sorted_records, 72, 2, 168f32);
+    let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    /*let parameters = &SVRParameters{
+        eps: 0.1,
+        c: 10f32,
+        tol: 1e-3,
+        kernel: Some(Box::from(Kernels::rbf().with_gamma(0.01f64))),
+    };
+    let svm = SVR::fit(&x_train, &y_train, parameters)
+        .unwrap();
+
+    let y_hat_svm = svm.predict(&x_test).unwrap();
+    // Calculate test error
+    println!(
+        "MSE: {}",
+        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+    );
+*/
+    // Random Forest
+    let parameters = RandomForestRegressorParameters{
+        max_depth: Some(40),
+        min_samples_leaf: 1,
+        min_samples_split: 2,
+        n_trees: 20,
+        m: Some(1),
+        keep_samples: false,
+        seed: 0,
+    };
+    let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    let y_hat_rf = rf.predict(&x_test).unwrap();
+    // Calculate test error
+    let mut labels: Vec<f32> = Vec::new();
+    let mut true_labels: Vec<f32> = Vec::new();
+    for i in 0..y_hat_rf.len() {
+        if &y_test[i] != &0f32 {
+            labels.push(y_hat_rf[i].clone());
+            true_labels.push(y_test[i].clone());
+        }
+    }
+    println!("MSE: {}", mean_squared_error(&true_labels, &labels).sqrt());
+    let mut precipitation = 0;
+    for label in &y_test {
+        if label == &0f32 {
+            precipitation += 1;
+        }
+    }
+    let precipitation: f32 = precipitation as f32 / y_test.len() as f32;
+    println!("{}", precipitation);
+
+    let mut labels: Vec<f32> = Vec::new();
+    for label in &y_hat_rf {
+        if label < &0.1f32 {
+            labels.push(0f32);
+        } else {
+            labels.push(1f32);
+        }
+    }
+
+    let mut true_labels: Vec<f32> = Vec::new();
+
+    for label in &y_test {
+        if label < &0.1f32 {
+            true_labels.push(0f32);
+        } else {
+            true_labels.push(1f32);
+        }
+    }
+
+    println!("{}", precision(&true_labels, &labels));
+
 
     // 7 day data predict after 24 hours
     /*
