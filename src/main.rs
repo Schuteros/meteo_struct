@@ -14,7 +14,7 @@ use smartcore::svm::{Kernels};
 use smartcore::ensemble::random_forest_regressor::{RandomForestRegressor, RandomForestRegressorParameters};
 // Model performance
 use smartcore::model_selection::train_test_split;
-use smartcore::metrics::{mean_squared_error, precision};
+use smartcore::metrics::{mean_absolute_error, mean_squared_error, precision};
 
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -52,11 +52,15 @@ struct Label {
     labels: i64
 }
 
+// datu lasīšanas algoritms
 fn read_data(path: &str) -> BTreeMap<i64, FullRecord> {
+    // tiek sagatavots datu lasītājs:
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b';')
         .from_path(path).unwrap();
     let mut records = Vec::new();
+    // tiek savākti dati no faila ar filtru,
+    // ka tikai Rīgas Latvijas Universitātes meteoroloģijas dati tiek paņemti
     for result in rdr.deserialize() {
         let record: Record = result.unwrap();
         if &record.STATION_ID == "RIGASLU" {
@@ -66,6 +70,7 @@ fn read_data(path: &str) -> BTreeMap<i64, FullRecord> {
 
     let mut sorted_records: BTreeMap<String, FullRecord> = BTreeMap::new();
 
+    // tiek savākti mūsu interesējošie dati un tiek sastrukturizēti pa datumiem
     for record in records {
         if sorted_records.contains_key(&record.DATETIME) {
             if &record.ABBREVIATION == "TDRY" {
@@ -102,6 +107,7 @@ fn read_data(path: &str) -> BTreeMap<i64, FullRecord> {
 
     let mut sorted_records_datetime_numeric: BTreeMap<i64, FullRecord> = BTreeMap::new();
 
+    // tiek datums un laiks pārveidots uz skaitlisku vērtību:
     for record in sorted_records {
         let dt = Utc.datetime_from_str(&record.0, "%Y.%m.%d %H:%M:%S").unwrap();
         sorted_records_datetime_numeric.insert(dt.timestamp(), record.1);
@@ -109,6 +115,7 @@ fn read_data(path: &str) -> BTreeMap<i64, FullRecord> {
 
     let mut sorted_records: BTreeMap<i64, FullRecord> = BTreeMap::new();
 
+    // datu punkti tiek sakārtoti no vecākajiem datiem uz jaunākajiem datiem:
     while !&sorted_records_datetime_numeric.is_empty() {
         let  mut smallest = sorted_records_datetime_numeric.first_key_value().unwrap().0.clone();
         for value in &sorted_records_datetime_numeric {
@@ -127,9 +134,12 @@ fn read_data(path: &str) -> BTreeMap<i64, FullRecord> {
         sorted_records.insert(smallest, full_record);
         sorted_records_datetime_numeric.remove(&smallest);
     }
+
+    // funkcija izdot datus ārā, lai tos var tālāk izmantot:
     sorted_records
 }
 
+// datu struktūras priekš mašīnmāčības veidošanas algoritms:
 fn create_data(records: &BTreeMap<i64, FullRecord>, hours: usize, hours_per_data: i32, after_hours: f32) -> (DenseMatrix<f32>, Vec<f32>) {
     let mut training_data: Vec<Vec<f32>> = Vec::new();
     let mut labels: Vec<f32> = Vec::new();
@@ -140,11 +150,13 @@ fn create_data(records: &BTreeMap<i64, FullRecord>, hours: usize, hours_per_data
     let mut writer = WriterBuilder::new().from_path("output.csv").unwrap();
     let mut label_writer = WriterBuilder::new().from_path("labels.csv").unwrap();
 
+    // veido strukturētus datus
     for data in records {
         let mut string = String::new();
         if length - 390 >= i {
             let mut element = Vec::new();
             let mut j = 0;
+            //saglabā vienu datu ounktu ar 4 paramatriem - temperatūŗa, mitrums, spiediens, nokrišņu daudzums
             for record in records.range((Included(*data.0), Included(data.0 + 3600 * hours as i64 +1))) {
                 if j % hours_per_data == 0 {
                     element.push(record.1.TDRY);
@@ -232,30 +244,42 @@ fn create_data_1(records: &BTreeMap<i64, FullRecord>, hours: usize, hours_per_da
 fn main() {
     let sorted_records = read_data("meteorologiskie_arhiva_dati.csv");
 
-    // 24 hour data, predict after 24 hours
-    /*
+    // --- Tiek izmantoti pēdējie 24 stundu dati lai pareģotu temperatūru pēc 24 stundām ---
+
+    // SVR
+    // tiek strukturizēti dati, lai izmantotu pēdējo 24 stundu datus, lai paredzētu temperatūru pēc 24 stundām:
     let (x, y) = create_data(&sorted_records, 24, 5, 24f32);
+    // tiek dati sadalīti divās daļās - x_train un y_train, dati, kurus izmantojam modeļa trenēšanai,
+    // x_test un un y_test, ko mēs izmantojam modeļa precizitātes mērīšanai
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    // tiek uzstādīti SVR hiperparametri:
     let parameters = &SVRParameters{
         eps: 0.1,
         c: 100f32,
         tol: 1e-3,
         kernel: Some(Box::from(Kernels::rbf().with_gamma(0.001f64))),
     };
+    // tiek trenēts SVR modelis
     let svm = SVR::fit(&x_train, &y_train, parameters)
         .unwrap();
 
+    // SVR modelis pareģo laikapstākļus
     let y_hat_svm = svm.predict(&x_test).unwrap();
-    // Calculate test error
+
+    // Tiek mērīta standartnovirze un vidējā absolūtā novirze, kura tiek pēc tam izprintēta terminālī.
     println!(
         "MSE: {}",
         (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
-     */
-    // Random Forest
-/*
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
+
+    // Gadījuma mežs
+    // tiek strukturizēti dati, lai izmantotu pēdējo 24 stundu datus, lai paredzētu temperatūru pēc 24 stundām:
     let (x, y) = create_data(&sorted_records, 24, 2, 24f32);
+    // tiek dati sadalīti divās daļās - x_train un y_train, dati, kurus izmantojam modeļa trenēšanai,
+    // x_test un un y_test, ko mēs izmantojam modeļa precizitātes mērīšanai
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
+    // tiek uzstādīti gadījuma meža hiperparametri:
     let parameters = RandomForestRegressorParameters{
         max_depth: Some(30),
         min_samples_leaf: 1,
@@ -265,11 +289,17 @@ fn main() {
         keep_samples: false,
         seed: 0,
     };
+    // tiek trenēts gadījuma meža modelis
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
+    // gadījuma meža modelis pareģo laikapstākļus
     let y_hat_rf = rf.predict(&x_test).unwrap();
-    // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
-*/
+    // Tiek mērīta standartnovirze un vidējā absolūtā novirze, kura tiek pēc tam izprintēta terminālī.
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
+
     // 24 hour data predict after 72 hour
 /*
     let (x, y) = create_data(&sorted_records, 24, 5, 72f32);
@@ -287,8 +317,9 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
 */
     // Random Forest
 /*
@@ -306,10 +337,14 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
  */
     // 24 hour data predict after 7 days
-/*
+    /*
     let (x, y) = create_data(&sorted_records, 24, 5, 168f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
@@ -325,8 +360,9 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
 */
     // Random Forest
 /*
@@ -344,11 +380,15 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
 */
 
     // 72 hour data predict after 24 hour
-/*
+    /*
     let (x, y) = create_data(&sorted_records, 72, 12, 24f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
@@ -364,11 +404,12 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
-*/
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
+     */
     // Random Forest
-/*
+    /*
     let (x, y) = create_data(&sorted_records, 72, 1, 24f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = RandomForestRegressorParameters{
@@ -383,10 +424,14 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
-*/
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
+     */
     // 72 hour data predict after 72 hour
-/*
+    /*
     let (x, y) = create_data(&sorted_records, 72, 12, 72f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
@@ -402,9 +447,10 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
-*/
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
+     */
     // Random Forest
     /*
     let (x, y) = create_data(&sorted_records, 72, 1, 72f32);
@@ -421,10 +467,14 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
-*/
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
+     */
     // 72 hour data predict after 7 days
-    /*
+/*
     let (x, y) = create_data(&sorted_records, 72, 12, 168f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
@@ -440,11 +490,12 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
 */
     // Random Forest
-    /*
+/*
     let (x, y) = create_data(&sorted_records, 72, 3, 168f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = RandomForestRegressorParameters{
@@ -459,11 +510,15 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
-     */
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
+*/
 
     // 7 day data predict after 24 hours
-    /*
+/*
     let (x, y) = create_data(&sorted_records, 168, 12, 24f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
@@ -479,9 +534,10 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
-     */
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
+*/
     // Random Forest
 /*
     let (x, y) = create_data(&sorted_records, 168, 1, 24f32);
@@ -498,10 +554,14 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
 */
     // 7 day data predict after 72 hour
-    /*
+/*
     let (x, y) = create_data(&sorted_records, 168, 12, 72f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = &SVRParameters{
@@ -517,11 +577,12 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
-     */
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
+*/
     // Random Forest
-    /*
+/*
     let (x, y) = create_data(&sorted_records, 168, 2, 72f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = RandomForestRegressorParameters{
@@ -536,8 +597,12 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
-     */
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
+*/
     // 7 day data predict after 7 days
 /*
     let (x, y) = create_data(&sorted_records, 168, 12, 168f32);
@@ -555,11 +620,12 @@ fn main() {
     // Calculate test error
     println!(
         "MSE: {}",
-        mean_squared_error(&y_test, &y_hat_svm).sqrt()
+        (mean_squared_error(&y_test, &y_hat_svm)).sqrt()
     );
- */
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_svm));
+*/
     // Random Forest
-/*
+
     let (x, y) = create_data(&sorted_records, 168, 2, 168f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = RandomForestRegressorParameters{
@@ -574,8 +640,12 @@ fn main() {
     let rf = RandomForestRegressor::fit(&x_train, &y_train, parameters).unwrap();
     let y_hat_rf = rf.predict(&x_test).unwrap();
     // Calculate test error
-    println!("MSE: {}", mean_squared_error(&y_test, &y_hat_rf).sqrt());
-*/
+    println!(
+        "MSE: {}",
+        (mean_squared_error(&y_test, &y_hat_rf)).sqrt()
+    );
+    println!("MAE: {}", mean_absolute_error(&y_test, &y_hat_rf));
+
 
 
 
@@ -1521,7 +1591,7 @@ fn main() {
 */
 
     // Random Forest
-
+/*
     let (x, y) = create_data_1(&sorted_records, 168, 1, 168f32);
     let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, Some(1000));
     let parameters = RandomForestRegressorParameters{
@@ -1574,5 +1644,5 @@ fn main() {
     }
 
     println!("{}", precision(&true_labels, &labels));
-
+*/
 }
